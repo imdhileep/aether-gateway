@@ -1,0 +1,78 @@
+# ──────────────────────────────────────────────────────────────────────────
+#  Aether Gateway configuration
+#  Env vars referenced via *_env are read at startup. Comma-separated values
+#  in a key env become multiple keys (load-balanced round-robin).
+# ──────────────────────────────────────────────────────────────────────────
+
+server:
+  port: 8787
+  host: 0.0.0.0
+
+auth:
+  # When true, every /v1 request must present a valid virtual key.
+  # When false, requests without a key run unauthenticated (great for local dev).
+  required: false
+  admin_key_env: GATEWAY_ADMIN_KEY
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  anthropic:
+    base_url: https://api.anthropic.com/v1
+    api_key_env: ANTHROPIC_API_KEY
+    anthropic_version: "2023-06-01"
+  gemini:
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key_env: GEMINI_API_KEY
+  mock:
+    # The mock provider needs no credentials — use it to try the gateway offline.
+    base_url: mock://local
+
+# Logical model name -> ordered failover chain of provider targets.
+# Request `model: "smart"` and the gateway tries each target in order.
+# Models NOT listed here are auto-routed by prefix (gpt-* -> openai,
+# claude-* -> anthropic, gemini-* -> gemini), so the gateway is a drop-in proxy.
+models:
+  smart:
+    description: Best-quality chat with cross-provider failover.
+    targets:
+      - { provider: anthropic, model: claude-3-5-sonnet-latest }
+      - { provider: openai, model: gpt-4o }
+  fast:
+    description: Cheap & fast, falls back across providers.
+    targets:
+      - { provider: openai, model: gpt-4o-mini }
+      - { provider: gemini, model: gemini-1.5-flash }
+  mock:
+    description: Offline echo model — no API key required.
+    targets:
+      - { provider: mock, model: mock-1 }
+
+cache:
+  enabled: true
+  # Cosine-similarity threshold for a semantic cache hit (0..1). Higher = stricter.
+  similarity_threshold: 0.93
+  ttl_seconds: 3600
+  max_entries: 2000
+  # Only cache when temperature <= this (high-temperature calls want variety).
+  max_temperature: 0.4
+  embeddings:
+    # auto = use OpenAI embeddings if OPENAI_API_KEY is set, else local hashing.
+    provider: auto
+    model: text-embedding-3-small
+
+guardrails:
+  pii:
+    mode: redact # off | flag | redact | block
+    scan_output: true
+  injection:
+    mode: flag # off | flag | block
+
+keys:
+  db_path: ./data/gateway.db
+
+retry:
+  max_attempts_per_target: 2
+  circuit_failure_threshold: 4
+  circuit_cooldown_ms: 15000
