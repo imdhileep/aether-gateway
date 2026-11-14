@@ -15,10 +15,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Application source + default config.
 COPY tsconfig.json gateway.config.yaml ./
 COPY src ./src
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # SQLite key store lives here; mount a volume to persist keys across restarts.
+# The entrypoint fixes volume ownership as root, then drops to `node`.
 RUN mkdir -p /app/data && chown -R node:node /app
-USER node
 VOLUME ["/app/data"]
 
 EXPOSE 8787
@@ -26,4 +27,5 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://localhost:'+(process.env.PORT||8787)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npm", "start"]
