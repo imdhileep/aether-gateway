@@ -4,6 +4,8 @@
 
 Aether is a drop-in LLM gateway. Point any OpenAI-compatible client at it, ask for a logical model like `smart` or `fast`, and the gateway routes to the best provider, fails over when one is down, serves semantically-cached answers for free, redacts PII, enforces per-key budgets, and tracks every dollar — all behind a single endpoint.
 
+**Live:** dashboard at https://aether-gateway-dk.fly.dev/dashboard, serving [DocQA](https://docqa-dk.fly.dev) (`/v1` requires a virtual key).
+
 It runs **fully offline out of the box** via a built-in `mock` model, so you can try every feature with zero API keys.
 
 ---
