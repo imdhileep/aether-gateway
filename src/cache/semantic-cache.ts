@@ -1,6 +1,6 @@
 import type { ResolvedConfig } from "../config.js";
 import { log } from "../logger.js";
-import type { ChatCompletionRequest, ChatCompletionResponse } from "../types.js";
+import type { AetherExtension, ChatCompletionRequest, ChatCompletionResponse } from "../types.js";
 import { flattenMessages, genId, nowSec } from "../util.js";
 import { cosine, makeEmbedder, type Embedder } from "./embeddings.js";
 
@@ -48,8 +48,9 @@ export class SemanticCache {
     return this.config.cache;
   }
 
-  private bucketOf(req: ChatCompletionRequest): string {
-    return `${req.model}:${tempBucket(req.temperature)}`;
+  private bucketOf(req: ChatCompletionRequest, ext?: AetherExtension): string {
+    const scope = ext?.cache_scope ? `:${ext.cache_scope}` : "";
+    return `${req.model}:${tempBucket(req.temperature)}${scope}`;
   }
 
   /** Cacheable only when enabled and the call is (near-)deterministic. */
@@ -57,21 +58,21 @@ export class SemanticCache {
     return this.c.enabled && (req.temperature ?? 0) <= this.c.max_temperature;
   }
 
-  private async vectorFor(req: ChatCompletionRequest): Promise<number[] | null> {
+  private async vectorFor(req: ChatCompletionRequest, ext?: AetherExtension): Promise<number[] | null> {
     try {
-      return await this.embedder.embed(flattenMessages(req.messages));
+      return await this.embedder.embed(ext?.cache_key ?? flattenMessages(req.messages));
     } catch (e) {
       log.warn("cache embed failed; bypassing cache", { error: (e as Error).message });
       return null;
     }
   }
 
-  async lookup(req: ChatCompletionRequest): Promise<CacheHit | null> {
+  async lookup(req: ChatCompletionRequest, ext?: AetherExtension): Promise<CacheHit | null> {
     if (!this.cacheable(req)) return null;
-    const qv = await this.vectorFor(req);
+    const qv = await this.vectorFor(req, ext);
     if (!qv) return null;
 
-    const bucket = this.bucketOf(req);
+    const bucket = this.bucketOf(req, ext);
     const now = Date.now();
     let best = -1;
     let bestIdx = -1;
@@ -99,9 +100,9 @@ export class SemanticCache {
     return null;
   }
 
-  async store(req: ChatCompletionRequest, response: ChatCompletionResponse): Promise<void> {
+  async store(req: ChatCompletionRequest, response: ChatCompletionResponse, ext?: AetherExtension): Promise<void> {
     if (!this.cacheable(req)) return;
-    const v = await this.vectorFor(req);
+    const v = await this.vectorFor(req, ext);
     if (!v) return;
 
     const now = Date.now();
@@ -117,7 +118,7 @@ export class SemanticCache {
     this.entries.push({
       vector: v,
       response: structuredClone(response),
-      bucket: this.bucketOf(req),
+      bucket: this.bucketOf(req, ext),
       expiresAt: now + this.c.ttl_seconds * 1000,
       lastUsed: now,
     });

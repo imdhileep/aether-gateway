@@ -11,6 +11,13 @@ const PRICES: Record<string, [number, number]> = {
   "o1-mini": [1.1, 4.4],
   "o1": [15, 60],
   "o3-mini": [1.1, 4.4],
+  // Current Claude models (Anthropic first-party list prices, Nov 2026).
+  "claude-opus-5-5": [4, 20],
+  "claude-sonnet-5-5": [2, 10],
+  "claude-sonnet-5": [2, 10],
+  "claude-haiku-5-5": [0.1, 0.5],
+  "claude-sonnet-4-6": [3, 15],
+  "claude-haiku-4-5": [1, 5],
   "claude-3-5-haiku": [0.8, 4],
   "claude-3-5-sonnet": [3, 15],
   "claude-3-7-sonnet": [3, 15],

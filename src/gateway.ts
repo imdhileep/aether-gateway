@@ -5,7 +5,7 @@ import { applyInputGuardrails, applyOutputGuardrails, type InputGuardResult } fr
 import { KeyService } from "./keys/keys.js";
 import { Store, type VirtualKeyRow } from "./keys/store.js";
 import { Router } from "./router/router.js";
-import type { ChatCompletionRequest, ChatCompletionResponse, RequestContext } from "./types.js";
+import type { AetherExtension, ChatCompletionRequest, ChatCompletionResponse, RequestContext, Usage } from "./types.js";
 import { estimateTokens, flattenMessages, genId, nowSec } from "./util.js";
 
 export interface GatewayDeps {
@@ -52,11 +52,15 @@ export class Gateway {
     const auth = this.keys.authenticate(bearer);
     if (!auth.ok) return auth;
 
+    // The `aether` extension is gateway-only: strip it so it never reaches an upstream API.
+    const { aether, ...upstream } = req;
+    req = upstream as ChatCompletionRequest;
     const ctx: RequestContext = {
       requestedModel: req.model,
       keyId: auth.key?.id ?? null,
       cached: false,
       startedAt: Date.now(),
+      aether: parseExtension(aether),
     };
 
     const authz = this.keys.authorize(auth.key, req.model);
@@ -71,7 +75,7 @@ export class Gateway {
 
   /** Non-streaming completion: cache → route+failover → output guardrails → record. */
   async complete(p: Prepared, signal?: AbortSignal): Promise<CompleteResult> {
-    const hit = await this.cache.lookup(p.req);
+    const hit = await this.cache.lookup(p.req, p.ctx.aether);
     if (hit) {
       p.ctx.cached = true;
       this.redactOutput(hit.response);
@@ -81,16 +85,17 @@ export class Gateway {
 
     const res = await this.router.chat(p.req, p.ctx, signal);
     this.redactOutput(res);
-    await this.cache.store(p.req, res);
+    await this.cache.store(p.req, res, p.ctx.aether);
     const cost = costFor(p.ctx.servedModel ?? p.req.model, res.usage);
     this.recordUsage(p, res, cost, false);
     return { response: res, cache: "MISS" };
   }
 
   /** Build a response object for an accumulated stream, then cache + record it. */
-  async finishStream(p: Prepared, fullText: string): Promise<void> {
-    const promptTokens = estimateTokens(flattenMessages(p.req.messages));
-    const completionTokens = estimateTokens(fullText);
+  async finishStream(p: Prepared, fullText: string, usage?: Usage, ttftMs?: number): Promise<void> {
+    // Prefer the upstream's real token counts; estimate only when it sent none.
+    const promptTokens = usage?.prompt_tokens || estimateTokens(flattenMessages(p.req.messages));
+    const completionTokens = usage?.completion_tokens || estimateTokens(fullText);
     const response: ChatCompletionResponse = {
       id: genId("chatcmpl"),
       object: "chat.completion",
@@ -105,14 +110,14 @@ export class Gateway {
       ],
       usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
     };
-    await this.cache.store(p.req, response);
+    await this.cache.store(p.req, response, p.ctx.aether);
     const cost = costFor(p.ctx.servedModel ?? p.req.model, response.usage);
-    this.recordUsage(p, response, cost, false);
+    this.recordUsage(p, response, cost, false, ttftMs);
   }
 
-  recordCachedStream(p: Prepared, cached: ChatCompletionResponse): void {
+  recordCachedStream(p: Prepared, cached: ChatCompletionResponse, ttftMs?: number): void {
     p.ctx.cached = true;
-    this.recordUsage(p, cached, 0, true);
+    this.recordUsage(p, cached, 0, true, ttftMs);
   }
 
   private redactOutput(res: ChatCompletionResponse): void {
@@ -121,7 +126,7 @@ export class Gateway {
     choice.message.content = applyOutputGuardrails(contentOf(res), this.config).content;
   }
 
-  private recordUsage(p: Prepared, res: ChatCompletionResponse, cost: number, cached: boolean): void {
+  private recordUsage(p: Prepared, res: ChatCompletionResponse, cost: number, cached: boolean, ttftMs?: number): void {
     this.keys.record({
       keyId: p.ctx.keyId,
       requestedModel: p.ctx.requestedModel,
@@ -132,9 +137,19 @@ export class Gateway {
       costUsd: cost,
       cached,
       latencyMs: Date.now() - p.ctx.startedAt,
+      ttftMs: ttftMs ?? null,
       status: 200,
     });
   }
+}
+
+function parseExtension(raw: unknown): AetherExtension | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const ext: AetherExtension = {};
+  if (typeof r.cache_key === "string" && r.cache_key.trim()) ext.cache_key = r.cache_key;
+  if (typeof r.cache_scope === "string" && r.cache_scope.trim()) ext.cache_scope = r.cache_scope;
+  return Object.keys(ext).length ? ext : undefined;
 }
 
 export function buildGateway(config: ResolvedConfig, deps?: GatewayDeps): Gateway {

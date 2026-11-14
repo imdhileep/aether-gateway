@@ -37,13 +37,18 @@ models:
   smart:
     description: Best-quality chat with cross-provider failover.
     targets:
-      - { provider: anthropic, model: claude-3-5-sonnet-latest }
+      - { provider: anthropic, model: claude-sonnet-5-5 }
       - { provider: openai, model: gpt-4o }
   fast:
     description: Cheap & fast, falls back across providers.
     targets:
       - { provider: openai, model: gpt-4o-mini }
       - { provider: gemini, model: gemini-1.5-flash }
+  docqa:
+    description: DocQA answers — Sonnet 5.5, failing over to Haiku 5.5.
+    targets:
+      - { provider: anthropic, model: claude-sonnet-5-5 }
+      - { provider: anthropic, model: claude-haiku-5-5 }
   mock:
     description: Offline echo model — no API key required.
     targets:

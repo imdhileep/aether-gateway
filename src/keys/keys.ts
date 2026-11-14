@@ -61,8 +61,8 @@ export class KeyService {
     this.store.recordUsage(event);
   }
 
-  summary() {
-    return this.store.summary();
+  summary(sinceMs?: number) {
+    return this.store.summary(sinceMs);
   }
 
   recent(limit?: number) {

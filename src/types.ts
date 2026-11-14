@@ -56,6 +56,21 @@ export interface ChatCompletionChunk {
     delta: { role?: "assistant"; content?: string };
     finish_reason: string | null;
   }[];
+  /** Present on the final chunk when the upstream reported real token usage. */
+  usage?: Usage;
+}
+
+/**
+ * Gateway-specific request extension (stripped before forwarding upstream).
+ * `cache_key` — text to embed for the semantic cache instead of the whole
+ *   prompt (e.g. just the user's question in a RAG app, where the retrieved
+ *   context would otherwise dominate the embedding).
+ * `cache_scope` — exact-match namespace for the cache (e.g. a document id),
+ *   so semantically similar questions about *different* documents never collide.
+ */
+export interface AetherExtension {
+  cache_key?: string;
+  cache_scope?: string;
 }
 
 // ── Internal request context threaded through the pipeline ──────────────────
@@ -72,6 +87,8 @@ export interface RequestContext {
   /** Concrete upstream model that served the request. */
   servedModel?: string;
   startedAt: number;
+  /** Gateway extension fields from the request body (`aether`). */
+  aether?: AetherExtension;
 }
 
 /** Normalized error so the router can decide whether to fail over. */

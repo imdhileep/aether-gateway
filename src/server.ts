@@ -7,7 +7,7 @@ import type { Gateway } from "./gateway.js";
 import type { InputGuardResult } from "./guardrails/index.js";
 import { log } from "./logger.js";
 import { makeChunk } from "./providers/openai.js";
-import { ProviderError, type ChatCompletionRequest, type ChatMessage } from "./types.js";
+import { ProviderError, type ChatCompletionChunk, type ChatCompletionRequest, type ChatMessage } from "./types.js";
 import { genId } from "./util.js";
 
 const MessageSchema = z
@@ -86,9 +86,11 @@ export function buildServer(gw: Gateway): Hono {
     return jsonResponse({ object: "list", data });
   });
 
-  app.get("/metrics", () =>
+  // `?since=<epoch ms>` scopes the DB-backed aggregates to a time window, so a
+  // load test or eval run can read its own numbers without resetting the gateway.
+  app.get("/metrics", (c) =>
     jsonResponse({
-      ...gw.keys.summary(),
+      ...gw.keys.summary(Number(c.req.query("since")) || 0),
       cache: gw.cache.stats(),
       circuits: gw.router.health(),
       models: gw.router.listModels(),
@@ -141,11 +143,14 @@ export function buildServer(gw: Gateway): Hono {
       }
     }
 
+    // Look the cache up BEFORE opening the stream so x-cache can ride on the headers.
+    const hit = await gw.cache.lookup(p.req, p.ctx.aether);
+    c.header("x-cache", hit ? "HIT" : "MISS");
+    if (hit) c.header("x-cache-similarity", hit.similarity.toFixed(4));
     for (const [k, v] of Object.entries(guarded)) c.header(k, v);
     return streamSSE(c, async (s) => {
-      const hit = await gw.cache.lookup(p.req);
       if (hit) {
-        gw.recordCachedStream(p, hit.response);
+        gw.recordCachedStream(p, hit.response, Date.now() - p.ctx.startedAt);
         const id = genId("chatcmpl");
         const text = hit.response.choices[0]?.message.content ?? "";
         for (const tok of text.split(/(\s+)/)) {
@@ -156,13 +161,18 @@ export function buildServer(gw: Gateway): Hono {
         return;
       }
       let full = "";
+      let usage: ChatCompletionChunk["usage"];
+      let ttft: number | undefined;
       try {
         for await (const chunk of gw.router.stream(p.req, p.ctx, signal)) {
-          full += chunk.choices[0]?.delta?.content ?? "";
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (delta && ttft === undefined) ttft = Date.now() - p.ctx.startedAt;
+          full += delta;
+          if (chunk.usage) usage = chunk.usage;
           await s.writeSSE({ data: JSON.stringify(chunk) });
         }
         await s.writeSSE({ data: "[DONE]" });
-        await gw.finishStream(p, full);
+        await gw.finishStream(p, full, usage, ttft);
       } catch (e) {
         const message = e instanceof Error ? e.message : "stream error";
         await s.writeSSE({ event: "error", data: JSON.stringify({ error: { message, type: "upstream_error" } }) });

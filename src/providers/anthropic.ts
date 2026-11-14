@@ -34,8 +34,17 @@ function adapt(messages: ChatMessage[]): { system: string; messages: AnthropicMs
 
 function mapStop(reason: string | null | undefined): string {
   if (reason === "max_tokens") return "length";
+  // A safety-classifier decline is a filtered completion in OpenAI terms.
+  if (reason === "refusal") return "content_filter";
   return "stop";
 }
+
+// Claude 4.7+ / 5.x models reject non-default sampling params (400), so the
+// gateway drops them rather than failing an otherwise valid OpenAI request.
+const NO_SAMPLING = /^claude-(?:(?:opus|sonnet|haiku|fable|mythos)-(?:5|4-[789]))/;
+
+// OpenAI's `reasoning_effort` maps onto Anthropic's `output_config.effort`.
+const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
 function buildBody(req: ChatCompletionRequest, model: string, stream: boolean) {
   const { system, messages } = adapt(req.messages);
@@ -46,8 +55,12 @@ function buildBody(req: ChatCompletionRequest, model: string, stream: boolean) {
     stream,
   };
   if (system) body.system = system;
-  if (typeof req.temperature === "number") body.temperature = req.temperature;
-  if (typeof req.top_p === "number") body.top_p = req.top_p;
+  if (!NO_SAMPLING.test(model)) {
+    if (typeof req.temperature === "number") body.temperature = req.temperature;
+    if (typeof req.top_p === "number") body.top_p = req.top_p;
+  }
+  const effort = req.reasoning_effort;
+  if (typeof effort === "string" && EFFORTS.has(effort)) body.output_config = { effort };
   if (req.stop) body.stop_sequences = Array.isArray(req.stop) ? req.stop : [req.stop];
   return JSON.stringify(body);
 }
@@ -125,20 +138,34 @@ export const anthropicProvider: Provider = {
 
     const id = newCompletionId();
     let stopReason: string | null = null;
+    // Real token counts: input arrives on message_start, output on message_delta.
+    let inputTokens = 0;
+    let outputTokens = 0;
+    const finalChunk = () => {
+      const c = makeChunk(id, opts.model, "", mapStop(stopReason));
+      c.usage = { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens };
+      return c;
+    };
     for await (const data of sseEvents(res.body)) {
       const evt = JSON.parse(data) as {
         type: string;
+        message?: { usage?: { input_tokens?: number; output_tokens?: number } };
         delta?: { type?: string; text?: string; stop_reason?: string };
+        usage?: { output_tokens?: number };
       };
-      if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+      if (evt.type === "message_start") {
+        inputTokens = evt.message?.usage?.input_tokens ?? 0;
+        outputTokens = evt.message?.usage?.output_tokens ?? 0;
+      } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
         yield makeChunk(id, opts.model, evt.delta.text ?? "", null);
-      } else if (evt.type === "message_delta" && evt.delta?.stop_reason) {
-        stopReason = evt.delta.stop_reason;
+      } else if (evt.type === "message_delta") {
+        if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
+        if (typeof evt.usage?.output_tokens === "number") outputTokens = evt.usage.output_tokens;
       } else if (evt.type === "message_stop") {
-        yield makeChunk(id, opts.model, "", mapStop(stopReason));
+        yield finalChunk();
         return;
       }
     }
-    yield makeChunk(id, opts.model, "", mapStop(stopReason));
+    yield finalChunk();
   },
 };
