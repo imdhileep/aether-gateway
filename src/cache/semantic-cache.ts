@@ -124,6 +124,15 @@ export class SemanticCache {
     });
   }
 
+  /** Drop every entry and reset hit/miss counters. Returns entries removed. */
+  clear(): number {
+    const n = this.entries.length;
+    this.entries = [];
+    this.hits = 0;
+    this.misses = 0;
+    return n;
+  }
+
   stats(): CacheStats {
     const total = this.hits + this.misses;
     return {

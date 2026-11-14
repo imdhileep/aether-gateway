@@ -89,6 +89,18 @@ describe("aether cache extension", () => {
   });
 });
 
+describe("admin cache clear", () => {
+  it("requires the admin key and empties the cache", async () => {
+    const { gw } = testGateway();
+    const app = buildServer(gw);
+    await gw.cache.store({ model: "mock", messages: [{ role: "user", content: "hi" }] }, res("x"));
+    expect((await app.request("/admin/cache/clear", { method: "POST" })).status).toBe(401);
+    const ok = await app.request("/admin/cache/clear", { method: "POST", headers: { "x-admin-key": "test-admin" } });
+    expect(((await ok.json()) as { removed: number }).removed).toBe(1);
+    expect(gw.cache.stats().entries).toBe(0);
+  });
+});
+
 describe("latency stats", () => {
   it("nearest-rank percentiles", () => {
     const s = stats([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 100]);

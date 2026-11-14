@@ -241,6 +241,13 @@ export function buildServer(gw: Gateway): Hono {
     return ok ? jsonResponse({ ok: true }) : errorResponse(404, "Key not found", "not_found");
   });
 
+  // Clear the semantic cache (e.g. before a benchmark so the first pass is cold).
+  app.post("/admin/cache/clear", (c) => {
+    const guard = requireAdmin(c.req.header("x-admin-key"), c.req.header("authorization"));
+    if (guard) return guard;
+    return jsonResponse({ ok: true, removed: gw.cache.clear() });
+  });
+
   app.onError((err) => providerErrorResponse(err));
   app.notFound(() => errorResponse(404, "Not found", "not_found"));
 
