@@ -149,6 +149,29 @@ await client.chat.completions.create({ model: "smart", messages: [{ role: "user"
 
 ---
 
+## Using it behind a RAG app
+
+[DocQA v2](https://github.com/imdhileep/doc-qa) routes every answer through Aether. Running it surfaced three things a gateway needs for RAG traffic, and all three are now built in.
+
+**RAG-aware cache identity.** In RAG the prompt is mostly retrieved context, so a semantic cache that embeds the whole prompt sees two *different* questions over the same passages as near-duplicates and serves the wrong answer (`test/extensions.test.ts` reproduces this). Clients can send an optional `aether` field, which is stripped before the request goes upstream:
+
+```json
+{
+  "model": "docqa",
+  "messages": [ ... ],
+  "stream": true,
+  "aether": { "cache_key": "When does the authorization code expire?", "cache_scope": "doc:52da565b" }
+}
+```
+
+`cache_key` is the text that gets embedded instead of the full prompt, and `cache_scope` is an exact-match namespace (for example a document id). Across 160 DocQA eval requests over 3 documents there were **0 false hits**: exact repeats hit 40/40 and lightly edited questions hit 38/40. Streaming responses now carry `x-cache: HIT|MISS` as well.
+
+**Real token accounting and latency percentiles.** Anthropic streams report true input and output tokens (from `message_start` / `message_delta`) instead of an estimate, and each request records time to first token. `/metrics` returns p50/p95 latency split by cache outcome, TTFT, and average tokens per request. `?since=` lets a benchmark read its own window without restarting the gateway.
+
+**Claude 5.5 support.** Current prices for Opus/Sonnet/Haiku 5.5. OpenAI's `reasoning_effort` maps to Anthropic's `output_config.effort`. Sampling parameters that Claude 4.7+ and 5.x reject are dropped instead of failing the request. A refusal becomes `finish_reason: "content_filter"`. The `smart` and `docqa` routes run on `claude-sonnet-5-5`, with `docqa` failing over to `claude-haiku-5-5`.
+
+---
+
 ## Configuration
 
 Everything lives in [`gateway.config.yaml`](gateway.config.yaml):
@@ -169,12 +192,13 @@ Everything lives in [`gateway.config.yaml`](gateway.config.yaml):
 |--------|------|---------|
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat (streaming + non-streaming) |
 | `GET`  | `/v1/models` | List logical models |
-| `GET`  | `/metrics` | Usage, spend, cache & circuit stats (JSON) |
+| `GET`  | `/metrics` | Usage, spend, p50/p95 latency + TTFT, cache & circuit stats (JSON); `?since=<epoch ms>` scopes it to a window |
 | `GET`  | `/healthz` | Liveness + circuit state |
 | `GET`  | `/dashboard` | Live HTML dashboard |
 | `POST` `GET` | `/admin/keys` | Create / list virtual keys (admin) |
 | `POST` | `/admin/keys/:id/{enable\|disable}` | Toggle a key (admin) |
 | `DELETE` | `/admin/keys/:id` | Delete a key (admin) |
+| `POST` | `/admin/cache/clear` | Empty the semantic cache, e.g. before a benchmark (admin) |
 
 ---
 
