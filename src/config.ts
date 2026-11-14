@@ -117,6 +117,11 @@ export function loadConfig(path?: string): ResolvedConfig {
   }
 
   if (process.env.PORT) parsed.server.port = Number(process.env.PORT);
+  // Deploy-time override so a public instance can require virtual keys
+  // without editing the shared config file.
+  const authEnv = process.env.GATEWAY_AUTH_REQUIRED?.toLowerCase();
+  if (authEnv === "true" || authEnv === "1") parsed.auth.required = true;
+  if (authEnv === "false" || authEnv === "0") parsed.auth.required = false;
 
   return {
     ...parsed,

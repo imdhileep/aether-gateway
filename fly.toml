@@ -1,0 +1,33 @@
+# Aether Gateway on Fly.io. Secrets (set with `fly secrets set`):
+#   ANTHROPIC_API_KEY, GATEWAY_ADMIN_KEY
+app = "aether-gateway-dk"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  GATEWAY_AUTH_REQUIRED = "true"   # every /v1 call needs an sk-aether-… virtual key
+
+[mounts]
+  source = "aether_data"            # SQLite: virtual keys + usage/cost log
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "3s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

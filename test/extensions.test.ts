@@ -110,3 +110,16 @@ describe("latency stats", () => {
     expect(stats([]).n).toBe(0);
   });
 });
+
+describe("GATEWAY_AUTH_REQUIRED override", () => {
+  it("forces auth on from the environment", async () => {
+    const { loadConfig: load } = await import("../src/config.js");
+    process.env.GATEWAY_AUTH_REQUIRED = "true";
+    try {
+      expect(load().auth.required).toBe(true);
+    } finally {
+      delete process.env.GATEWAY_AUTH_REQUIRED;
+    }
+    expect(load().auth.required).toBe(false);
+  });
+});
